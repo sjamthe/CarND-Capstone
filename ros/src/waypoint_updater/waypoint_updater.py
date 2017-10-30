@@ -3,6 +3,7 @@
 import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
+import tf
 
 import math
 
@@ -22,7 +23,8 @@ TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
 LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this number
-
+MPH_TO_MPS = 0.44704
+MAX_SPEED = 20 * MPH_TO_MPS
 
 class WaypointUpdater(object):
     def __init__(self):
@@ -32,21 +34,27 @@ class WaypointUpdater(object):
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
-
+        # rospy.Subscriber('/traffic_waypoint',Waypoint,self.traffic_cb)
+        # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
 
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
         # TODO: Add other member variables you need below
-
+        self.car_pose = None
+        self.waypoint_list = None
+        self.yaw = None
+        self.loop()
         rospy.spin()
 
+    # Callback functions
     def pose_cb(self, msg):
-        # TODO: Implement
-        pass
+        self.car_pose = msg
+        orientation = msg.pose.orientation
+        orientation_quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
+        _,_,self.yaw = tf.transformations.euler_from_quaternion(orientation_quaternion)
 
     def waypoints_cb(self, waypoints):
-        # TODO: Implement
-        pass
+        self.waypoint_list = waypoints
 
     def traffic_cb(self, msg):
         # TODO: Callback for /traffic_waypoint message. Implement
@@ -56,20 +64,77 @@ class WaypointUpdater(object):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
         pass
 
+    # Publish final_waypoints
+    def loop(self):
+        rate = rospy.Rate(40) # 40Hz
+        while not rospy.is_shutdown():
+            if (self.car_pose is None) or (self.waypoint_list is None):
+                continue
+
+            frame_id = self.waypoint_list.header.frame_id
+            lane_start = self.NextWaypoint()
+            waypoint_list = self.waypoint_list.waypoints[lane_start:lane_start + LOOKAHEAD_WPS]
+
+            for waypoint in waypoint_list:
+                self.set_waypoint_velocity(waypoint, MAX_SPEED)
+
+            if lane_start + LOOKAHEAD_WPS >= len(self.waypoint_list.waypoints):
+                for waypoint in waypoint_list[-10:]:
+                    self.set_waypoint_velocity(waypoint, 0)
+            lane = self.get_lane_msg(frame_id, waypoint_list)
+
+            self.final_waypoints_pub.publish(lane)
+            rate.sleep()
+
+    # Helper functions
     def get_waypoint_velocity(self, waypoint):
-        return waypoint.twist.twist.linear.x
+        return waypoint.waypoints.twist.twist.linear.x
 
-    def set_waypoint_velocity(self, waypoints, waypoint, velocity):
-        waypoints[waypoint].twist.twist.linear.x = velocity
+    def set_waypoint_velocity(self, waypoint, velocity):
+        waypoint.twist.twist.linear.x = velocity
 
-    def distance(self, waypoints, wp1, wp2):
-        dist = 0
-        dl = lambda a, b: math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2  + (a.z-b.z)**2)
-        for i in range(wp1, wp2+1):
-            dist += dl(waypoints[wp1].pose.pose.position, waypoints[i].pose.pose.position)
-            wp1 = i
-        return dist
+    def get_lane_msg(self, frame_id, waypoints):
+        lane = Lane()
+        lane.header.frame_id = frame_id
+        lane.header.stamp = rospy.Time.now()
+        lane.waypoints = waypoints
+        return lane
+    # Compute the distance between waypoint the current car position
+    def cal_distance(self, waypoint, car_pose):
+        wp_x = waypoint.pose.pose.position.x
+        wp_y = waypoint.pose.pose.position.y
+        wp_z = waypoint.pose.pose.position.z
+        car_x = car_pose.pose.position.x
+        car_y = car_pose.pose.position.y
+        car_z = car_pose.pose.position.z
+        return math.sqrt((wp_x-car_x)**2 + (wp_y-car_y)**2 + (wp_z-car_z)**2)
 
+    # We have a list of all these waypoints around our highway, we can see which is closest to us.
+    def ClosestWaypoint(self):
+        closest_distance = 100000.0 # large number
+        closestWaypoint_index = 0
+        start = 0
+        end = len(self.waypoint_list.waypoints)
+        for i in range(start, end):
+            dist = self.cal_distance(self.waypoint_list.waypoints[i],self.car_pose)
+            if(dist < closest_distance):
+                closestWaypoint_index = i
+                closest_distance = dist
+        return closestWaypoint_index
+
+    # The difference between closest_waypoint and the next_waypoint; sometimes the closest waypoint maybe at your back.
+    def NextWaypoint(self):
+        closest_waypoint_index = self.ClosestWaypoint()
+        #number_waypoints = len(self.waypoint_list)
+        waypoint_x = self.waypoint_list.waypoints[closest_waypoint_index].pose.pose.position.x
+        waypoint_y = self.waypoint_list.waypoints[closest_waypoint_index].pose.pose.position.x
+        delta_x = waypoint_x - self.car_pose.pose.position.x
+        delta_y = waypoint_y - self.car_pose.pose.position.y
+        heading = math.atan2(delta_y, delta_x)
+        angle = abs(self.yaw - heading)
+        if angle > math.pi / 4:
+            closest_waypoint_index = closest_waypoint_index + 1
+        return closest_waypoint_index
 
 if __name__ == '__main__':
     try:
