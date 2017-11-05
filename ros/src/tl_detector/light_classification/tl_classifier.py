@@ -1,6 +1,8 @@
 from styx_msgs.msg import TrafficLight
 import cv2
 import numpy as np
+
+
 class TLClassifier(object):
     def __init__(self):
         #TODO load classifier
@@ -43,12 +45,13 @@ class TLClassifier(object):
         mask = mask1 + mask2
 
         # Step 4: Segmentaion
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (8, 8))
         mask_closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask_clean = cv2.morphologyEx(mask_closed, cv2.MORPH_OPEN, kernel)
 
         _, contours, _ = cv2.findContours(mask_clean, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-        if len (contours) > 0:
-           result = TrafficLight.RED
+        if len(contours) > 0:
+            result = TrafficLight.RED
+
         return result
