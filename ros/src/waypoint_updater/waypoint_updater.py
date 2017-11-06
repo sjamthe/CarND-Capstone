@@ -3,6 +3,7 @@
 import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
+from std_msgs.msg import Int32
 import tf
 
 import math
@@ -34,7 +35,7 @@ class WaypointUpdater(object):
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
-        # rospy.Subscriber('/traffic_waypoint',Waypoint,self.traffic_cb)
+        rospy.Subscriber('/traffic_waypoint', Int32 ,self.traffic_cb)
         # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
 
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
@@ -43,6 +44,7 @@ class WaypointUpdater(object):
         self.car_pose = None
         self.waypoint_list = None
         self.yaw = None
+        self.trafficstop_wp = None
         self.loop()
         rospy.spin()
 
@@ -55,10 +57,11 @@ class WaypointUpdater(object):
 
     def waypoints_cb(self, waypoints):
         self.waypoint_list = waypoints
+		
 
     def traffic_cb(self, msg):
         # TODO: Callback for /traffic_waypoint message. Implement
-        pass
+        self.trafficstop_wp = msg.data
 
     def obstacle_cb(self, msg):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
@@ -67,31 +70,57 @@ class WaypointUpdater(object):
     # Publish final_waypoints
     def loop(self):
         rate = rospy.Rate(40) # 40Hz
+	#rospy.loginfo("Starting loop")
         while not rospy.is_shutdown():
             if (self.car_pose is None) or (self.waypoint_list is None):
                 continue
 
             frame_id = self.waypoint_list.header.frame_id
             lane_start = self.NextWaypoint()
-            waypoint_list = self.waypoint_list.waypoints[lane_start:lane_start + LOOKAHEAD_WPS]
+            lane_end = lane_start + LOOKAHEAD_WPS
+            waypoint_list = self.waypoint_list.waypoints[lane_start:lane_end]
 
+            if(self.trafficstop_wp > 0):
+                print("lane_Start :", lane_start, "self.trafficstop_wp",self.trafficstop_wp)
+            
+            #do we need to stop/slow down?
+            if(self.trafficstop_wp >= lane_start and self.trafficstop_wp <= lane_end):
+                slow_len = self.trafficstop_wp - lane_start - 15
+                old_speed = MAX_SPEED
+                if(lane_start > 0):
+                    old_speed = self.get_waypoint_velocity(self.waypoint_list.waypoints[lane_start-1])
+                print("slow_len",slow_len,"old_speed",old_speed)
+
+            current = 0
             for waypoint in waypoint_list:
-                self.set_waypoint_velocity(waypoint, MAX_SPEED)
+                if(self.trafficstop_wp >= lane_start and self.trafficstop_wp <= lane_end):
+                    if(current >= slow_len):
+                        self.set_waypoint_velocity(waypoint, 0)
+                    else:
+                        speed = old_speed*(1.0-float(current)/float(slow_len))
+                        if(speed < 0):
+                            speed = 0
+                        self.set_waypoint_velocity(waypoint, speed)
+                        print("setting speed ", speed, "for cur",current)
+                else:                    
+                    self.set_waypoint_velocity(waypoint, MAX_SPEED)
+                current = current + 1
 
             if lane_start + LOOKAHEAD_WPS >= len(self.waypoint_list.waypoints):
                 for waypoint in waypoint_list[-10:]:
                     self.set_waypoint_velocity(waypoint, 0)
             lane = self.get_lane_msg(frame_id, waypoint_list)
 
-            self.final_waypoints_pub.publish(lane)
+            self.final_waypoints_pub.publish(lane)	
             rate.sleep()
 
     # Helper functions
     def get_waypoint_velocity(self, waypoint):
-        return waypoint.waypoints.twist.twist.linear.x
+        return waypoint.twist.twist.linear.x
 
     def set_waypoint_velocity(self, waypoint, velocity):
         waypoint.twist.twist.linear.x = velocity
+        #print("setting velocity", velocity)
 
     def get_lane_msg(self, frame_id, waypoints):
         lane = Lane()
