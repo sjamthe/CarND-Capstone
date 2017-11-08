@@ -81,7 +81,7 @@ class DBWNode(object):
         self.dbw_enabled = msg.data
 
     def loop(self):
-        rate = rospy.Rate(25) # 50Hz
+        rate = rospy.Rate(50) # 50Hz
         while not rospy.is_shutdown():
             # Delay
             self.delta_time = rospy.rostime.get_time() - self.prev_timestamp
