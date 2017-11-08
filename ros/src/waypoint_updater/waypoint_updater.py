@@ -4,6 +4,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
 from std_msgs.msg import Int32
+from geometry_msgs.msg import TwistStamped
 import tf
 
 import math
@@ -33,10 +34,11 @@ class WaypointUpdater(object):
 
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
+	rospy.Subscriber('/current_velocity', TwistStamped, self.current_velocity_cb) # Provide linear velocity
 
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
-        rospy.Subscriber('/traffic_waypoint', Int32 ,self.traffic_cb)
-        # rospy.Subscriber('/obstacle_waypoint', Waypoint, self.obstacle_cb)
+        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
+        rospy.Subscriber('/obstacle_waypoint', Lane, self.obstacle_cb)
 
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
@@ -44,7 +46,8 @@ class WaypointUpdater(object):
         self.car_pose = None
         self.waypoint_list = None
         self.yaw = None
-        self.trafficstop_wp = None
+        self.red_traffic_light_waypoint_index = None
+        self.current_velocity = None
         self.loop()
         rospy.spin()
 
@@ -57,70 +60,66 @@ class WaypointUpdater(object):
 
     def waypoints_cb(self, waypoints):
         self.waypoint_list = waypoints
-		
 
     def traffic_cb(self, msg):
         # TODO: Callback for /traffic_waypoint message. Implement
-        self.trafficstop_wp = msg.data
+        self.red_traffic_light_waypoint_index = msg.data
 
     def obstacle_cb(self, msg):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
         pass
 
+    def current_velocity_cb(self,msg):
+        self.current_velocity = msg
+
     # Publish final_waypoints
     def loop(self):
-        rate = rospy.Rate(40) # 40Hz
-	#rospy.loginfo("Starting loop")
+        rate = rospy.Rate(5) # 40Hz
         while not rospy.is_shutdown():
             if (self.car_pose is None) or (self.waypoint_list is None):
                 continue
 
             frame_id = self.waypoint_list.header.frame_id
             lane_start = self.NextWaypoint()
-            lane_end = lane_start + LOOKAHEAD_WPS
-            waypoint_list = self.waypoint_list.waypoints[lane_start:lane_end]
+            waypoint_list = self.waypoint_list.waypoints[lane_start:lane_start + LOOKAHEAD_WPS]
 
-            if(self.trafficstop_wp > 0):
-                print("lane_Start :", lane_start, "self.trafficstop_wp",self.trafficstop_wp)
-            
-            #do we need to stop/slow down?
-            if(self.trafficstop_wp >= lane_start and self.trafficstop_wp <= lane_end):
-                slow_len = self.trafficstop_wp - lane_start - 15
-                old_speed = MAX_SPEED
-                if(lane_start > 0):
-                    old_speed = self.get_waypoint_velocity(self.waypoint_list.waypoints[lane_start-1])
-                print("slow_len",slow_len,"old_speed",old_speed)
+            if(self.current_velocity is not None):
+                current_linear_vel = self.current_velocity.twist.linear.x
+                print("lane_start", lane_start, "red_light",self.red_traffic_light_waypoint_index, 
+                        "current_linear_vel",current_linear_vel)
 
-            current = 0
             for waypoint in waypoint_list:
-                if(self.trafficstop_wp >= lane_start and self.trafficstop_wp <= lane_end):
-                    if(current >= slow_len):
-                        self.set_waypoint_velocity(waypoint, 0)
-                    else:
-                        speed = old_speed*(1.0-float(current)/float(slow_len))
-                        if(speed < 0):
-                            speed = 0
-                        self.set_waypoint_velocity(waypoint, speed)
-                        print("setting speed ", speed, "for cur",current)
-                else:                    
-                    self.set_waypoint_velocity(waypoint, MAX_SPEED)
-                current = current + 1
+                self.set_waypoint_velocity(waypoint, MAX_SPEED)
 
             if lane_start + LOOKAHEAD_WPS >= len(self.waypoint_list.waypoints):
                 for waypoint in waypoint_list[-10:]:
                     self.set_waypoint_velocity(waypoint, 0)
-            lane = self.get_lane_msg(frame_id, waypoint_list)
 
-            self.final_waypoints_pub.publish(lane)	
+            if self.red_traffic_light_waypoint_index and self.red_traffic_light_waypoint_index > 0:
+                red_traffic_light_distance = max(0, self.red_traffic_light_waypoint_index - lane_start)
+                #min is needed else we get IndexError: list index out of range
+                red_traffic_light_distance = min(red_traffic_light_distance, len(waypoint_list)-1)
+                full_stop = waypoint_list[red_traffic_light_distance]
+
+                for waypoint_index, waypoint in enumerate(waypoint_list):
+                    distance_to_traffic_light = self.cal_distance(waypoint, full_stop.pose)
+                    distance_to_traffic_light = max(0, distance_to_traffic_light - 2)
+                    velocity = math.sqrt(2 * 0.5 * distance_to_traffic_light)
+                    if velocity < 1.0:
+                        waypoint.twist.twist.linear.x = 0
+                    elif velocity < waypoint.twist.twist.linear.x:
+                        waypoint.twist.twist.linear.x = velocity
+
+            lane = self.get_lane_msg(frame_id, waypoint_list)
+            self.final_waypoints_pub.publish(lane)
             rate.sleep()
 
     # Helper functions
     def get_waypoint_velocity(self, waypoint):
-        return waypoint.twist.twist.linear.x
+        return waypoint.waypoints.twist.twist.linear.x
 
     def set_waypoint_velocity(self, waypoint, velocity):
         waypoint.twist.twist.linear.x = velocity
-        #print("setting velocity", velocity)
 
     def get_lane_msg(self, frame_id, waypoints):
         lane = Lane()
@@ -128,6 +127,7 @@ class WaypointUpdater(object):
         lane.header.stamp = rospy.Time.now()
         lane.waypoints = waypoints
         return lane
+
     # Compute the distance between waypoint the current car position
     def cal_distance(self, waypoint, car_pose):
         wp_x = waypoint.pose.pose.position.x
