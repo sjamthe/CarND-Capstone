@@ -100,9 +100,10 @@ class TLDetector(object):
             self.state = state
         elif self.state_count >= STATE_COUNT_THRESHOLD: # unknow time
             self.last_state = self.state
-            light_wp = light_wp if state == TrafficLight.RED else -1
+            light_wp = light_wp if state == TrafficLight.RED or state == TrafficLight.YELLOW else -1
             self.last_wp = light_wp
             self.upcoming_red_light_pub.publish(Int32(light_wp))
+            #print("publishing ", Int32(light_wp))
         else:
             self.upcoming_red_light_pub.publish(Int32(self.last_wp))
         self.state_count += 1
@@ -137,6 +138,7 @@ class TLDetector(object):
                 closestWaypoint_index = i
                 closest_distance = dist
         return closestWaypoint_index
+
 
     def get_light_state(self, light):
         """Determines the current color of the traffic light
@@ -173,9 +175,10 @@ class TLDetector(object):
 
         # List of positions that correspond to the line to stop in front of for a given intersection
         # stop_line_positions = self.config['stop_line_positions']
+
+        car_position_index = 100000 #MAX initialize
         if(self.pose and self.waypoints):
             car_position_index = self.get_closest_waypoint(self.pose.pose)
-
 
 
         #TODO find the closest visible traffic light (if one exists)
@@ -189,11 +192,7 @@ class TLDetector(object):
 
         if light:
             state = self.get_light_state(light)
-            #print("Traffic Light State", state)
-            if state == 0:
-                print ("RED")
-            else:
-                print("GREEN")
+
             return light_wp, state
         # self.waypoints = None
         return -1, TrafficLight.UNKNOWN
