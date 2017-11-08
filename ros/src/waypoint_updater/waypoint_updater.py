@@ -74,7 +74,7 @@ class WaypointUpdater(object):
 
     # Publish final_waypoints
     def loop(self):
-        rate = rospy.Rate(5) # 40Hz
+        rate = rospy.Rate(10) # 40Hz
         while not rospy.is_shutdown():
             if (self.car_pose is None) or (self.waypoint_list is None):
                 continue
@@ -100,11 +100,13 @@ class WaypointUpdater(object):
                 #min is needed else we get IndexError: list index out of range
                 red_traffic_light_distance = min(red_traffic_light_distance, len(waypoint_list)-1)
                 full_stop = waypoint_list[red_traffic_light_distance]
+                distance_to_traffic_light = max(0, self.cal_distance(waypoint_list[0], full_stop.pose)-2)
+                print("distance to stop",distance_to_traffic_light)
 
                 for waypoint_index, waypoint in enumerate(waypoint_list):
                     distance_to_traffic_light = self.cal_distance(waypoint, full_stop.pose)
                     distance_to_traffic_light = max(0, distance_to_traffic_light - 2)
-                    velocity = math.sqrt(2 * 0.5 * distance_to_traffic_light)
+                    velocity = math.sqrt(distance_to_traffic_light)
                     if velocity < 1.0:
                         waypoint.twist.twist.linear.x = 0
                     elif velocity < waypoint.twist.twist.linear.x:
